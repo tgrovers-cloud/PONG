@@ -354,7 +354,7 @@ def update_ball_and_collisions():
         sound_score.play()
 
         if left_score >= WIN_SCORE:
-            winner_text = "You Win! 🎉"
+            winner_text = "You Win!"
             sound_win.play()
             set_state(STATE_GAME_OVER)
         else:
