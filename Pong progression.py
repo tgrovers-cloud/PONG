@@ -1,441 +1,703 @@
 import pygame
 import sys
 import random
-import math
-from array import array
+from dataclasses import dataclass
 
 pygame.init()
-pygame.mixer.init()
 
-WIDTH, HEIGHT = 800, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("PONG - Single Player")
+CELL = 24
+COLS = 10
+ROWS = 20
 
+PANEL_W = 220
+WIDTH = COLS * CELL + PANEL_W
+HEIGHT = ROWS * CELL
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
+pygame.display.set_caption("TETRIS • Modern Neon Deluxe (Smaller)")
 clock = pygame.time.Clock()
 
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-GREEN = (20, 120, 20)
-RED = (220, 50, 50)
+FONT = pygame.font.SysFont("consolas", 18)
+MID_FONT = pygame.font.SysFont("consolas", 24, bold=True)
+BIG_FONT = pygame.font.SysFont("consolas", 46, bold=True)
 
-title_font = pygame.font.SysFont(None, 80)
-menu_font = pygame.font.SysFont(None, 50)
-small_font = pygame.font.SysFont(None, 36)
-score_font = pygame.font.SysFont(None, 50)
-game_over_font = pygame.font.SysFont(None, 70)
-countdown_font = pygame.font.SysFont(None, 120)
+BLACK = (6, 6, 12)
+PANEL_BG = (12, 12, 22)
+GLASS = (18, 18, 35)
+WHITE = (245, 245, 255)
+GRID_LINE = (42, 42, 75)
 
-WIN_SCORE = 5
+NEON = {
+    "I": (0, 255, 255),
+    "O": (255, 255, 0),
+    "T": (210, 0, 255),
+    "S": (0, 255, 120),
+    "Z": (255, 60, 120),
+    "J": (80, 140, 255),
+    "L": (255, 160, 0),
+    "GHOST": (200, 200, 220),
+}
 
-paddle_width = 10
-paddle_height = 100
-player_speed = 6
+SHAPES = {
+    "I": [
+        [(0, 1), (1, 1), (2, 1), (3, 1)],
+        [(2, 0), (2, 1), (2, 2), (2, 3)],
+        [(0, 2), (1, 2), (2, 2), (3, 2)],
+        [(1, 0), (1, 1), (1, 2), (1, 3)],
+    ],
+    "O": [
+        [(1, 0), (2, 0), (1, 1), (2, 1)],
+        [(1, 0), (2, 0), (1, 1), (2, 1)],
+        [(1, 0), (2, 0), (1, 1), (2, 1)],
+        [(1, 0), (2, 0), (1, 1), (2, 1)],
+    ],
+    "T": [
+        [(1, 0), (0, 1), (1, 1), (2, 1)],
+        [(1, 0), (1, 1), (2, 1), (1, 2)],
+        [(0, 1), (1, 1), (2, 1), (1, 2)],
+        [(1, 0), (0, 1), (1, 1), (1, 2)],
+    ],
+    "S": [
+        [(1, 0), (2, 0), (0, 1), (1, 1)],
+        [(1, 0), (1, 1), (2, 1), (2, 2)],
+        [(1, 1), (2, 1), (0, 2), (1, 2)],
+        [(0, 0), (0, 1), (1, 1), (1, 2)],
+    ],
+    "Z": [
+        [(0, 0), (1, 0), (1, 1), (2, 1)],
+        [(2, 0), (1, 1), (2, 1), (1, 2)],
+        [(0, 1), (1, 1), (1, 2), (2, 2)],
+        [(1, 0), (0, 1), (1, 1), (0, 2)],
+    ],
+    "J": [
+        [(0, 0), (0, 1), (1, 1), (2, 1)],
+        [(1, 0), (2, 0), (1, 1), (1, 2)],
+        [(0, 1), (1, 1), (2, 1), (2, 2)],
+        [(1, 0), (1, 1), (0, 2), (1, 2)],
+    ],
+    "L": [
+        [(2, 0), (0, 1), (1, 1), (2, 1)],
+        [(1, 0), (1, 1), (1, 2), (2, 2)],
+        [(0, 1), (1, 1), (2, 1), (0, 2)],
+        [(0, 0), (1, 0), (1, 1), (1, 2)],
+    ],
+}
 
-BASE_BALL_SPEED_X = 5
-MAX_BALL_SPEED_Y = 9
-BALL_SPEEDUP_FACTOR = 1.05
-MAX_BALL_SPEED_X = 12
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
 
-left_paddle = pygame.Rect(20, HEIGHT // 2 - paddle_height // 2, paddle_width, paddle_height)
-right_paddle = pygame.Rect(WIDTH - 30, HEIGHT // 2 - paddle_height // 2, paddle_width, paddle_height)
+def lighten(c, amt=55):
+    r, g, b = c
+    return (clamp(r + amt, 0, 255), clamp(g + amt, 0, 255), clamp(b + amt, 0, 255))
 
-ball_size = 15
-ball = pygame.Rect(WIDTH // 2, HEIGHT // 2, ball_size, ball_size)
+def darken(c, amt=95):
+    r, g, b = c
+    return (clamp(r - amt, 0, 255), clamp(g - amt, 0, 255), clamp(b - amt, 0, 255))
 
-ball_speed_x = BASE_BALL_SPEED_X
-ball_speed_y = random.choice([-4, -3, 3, 4])
+@dataclass
+class Piece:
+    kind: str
+    x: int
+    y: int
+    rot: int = 0
+    def cells(self):
+        return [(self.x + cx, self.y + cy) for cx, cy in SHAPES[self.kind][self.rot]]
 
-left_score = 0
-right_score = 0
+def empty_board():
+    return [[None for _ in range(COLS)] for _ in range(ROWS)]
 
-ai_speed = 4
-difficulty_name = ""
-ai_error = 60
-ai_delay_frames = 6
-ai_frame_counter = 0
+def in_bounds(x, y):
+    return 0 <= x < COLS and y < ROWS
+
+def valid(piece, board):
+    for x, y in piece.cells():
+        if not in_bounds(x, y):
+            return False
+        if y >= 0 and board[y][x] is not None:
+            return False
+    return True
+
+def lock_piece(piece, board):
+    for x, y in piece.cells():
+        if y >= 0:
+            board[y][x] = piece.kind
+
+def clear_lines(board):
+    full_rows = [i for i, row in enumerate(board) if all(cell is not None for cell in row)]
+    if not full_rows:
+        return board, 0, []
+    new_board = [row for row in board if any(cell is None for cell in row)]
+    cleared = ROWS - len(new_board)
+    while len(new_board) < ROWS:
+        new_board.insert(0, [None for _ in range(COLS)])
+    return new_board, cleared, full_rows
+
+def new_bag():
+    bag = list(SHAPES.keys())
+    random.shuffle(bag)
+    return bag
+
+def spawn_piece(kind):
+    return Piece(kind=kind, x=3, y=-2, rot=0)
+
+def get_drop_y(piece, board):
+    ghost = Piece(piece.kind, piece.x, piece.y, piece.rot)
+    while True:
+        ghost.y += 1
+        if not valid(ghost, board):
+            ghost.y -= 1
+            break
+    return ghost.y
+
+def fall_speed_ms(level, speed_multiplier=1.0):
+    base = max(65, 720 - (level - 1) * 55)
+    return int(base / speed_multiplier)
+
+def scoring_for_lines(cleared, level):
+    if cleared == 1: return 100 * level
+    if cleared == 2: return 300 * level
+    if cleared == 3: return 500 * level
+    if cleared == 4: return 800 * level
+    return 0
+
+def is_tetris(cleared):
+    return cleared == 4
+
+def glow_circle(surface, x, y, radius, color, alpha):
+    pygame.draw.circle(surface, (*color, alpha), (int(x), int(y)), int(radius))
+
+def draw_background_glow():
+    glow = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    glow_circle(glow, 95, 120, 120, (0, 255, 255), 38)
+    glow_circle(glow, 160, 360, 160, (210, 0, 255), 32)
+    glow_circle(glow, 360, 220, 160, (0, 255, 120), 28)
+    glow_circle(glow, 430, 460, 180, (255, 60, 120), 20)
+    screen.blit(glow, (0, 0))
+
+def neon_text(text, font, x, y, color):
+    shadow = font.render(text, True, color)
+    glow = pygame.Surface((shadow.get_width() + 14, shadow.get_height() + 14), pygame.SRCALPHA)
+    glow.blit(shadow, (7, 7))
+    for _ in [28, 18]:
+        screen.blit(glow, (x - 7, y - 7))
+    screen.blit(font.render(text, True, WHITE), (x, y))
+
+def draw_glass_playfield():
+    rect = pygame.Rect(0, 0, COLS * CELL, HEIGHT)
+    glass = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    glass.fill((*GLASS, 220))
+    screen.blit(glass, rect.topleft)
+    pygame.draw.rect(screen, (0, 255, 255), rect, 2, border_radius=8)
+
+def draw_grid():
+    for x in range(COLS + 1):
+        pygame.draw.line(screen, GRID_LINE, (x * CELL, 0), (x * CELL, HEIGHT), 1)
+    for y in range(ROWS + 1):
+        pygame.draw.line(screen, GRID_LINE, (0, y * CELL), (COLS * CELL, y * CELL), 1)
+
+def draw_block_neon(px, py, color, alpha=255):
+    glow = pygame.Surface((CELL * 3, CELL * 3), pygame.SRCALPHA)
+    gx, gy = CELL, CELL
+    for r, a in [(14, 28), (9, 40)]:
+        pygame.draw.rect(
+            glow,
+            (*color, int(a * (alpha / 255))),
+            (gx - r // 2, gy - r // 2, CELL + r, CELL + r),
+            border_radius=10
+        )
+    screen.blit(glow, (px - CELL, py - CELL))
+
+    surf = pygame.Surface((CELL, CELL), pygame.SRCALPHA)
+    surf.fill((*color, alpha))
+
+    top = lighten(color, 60)
+    bottom = darken(color, 100)
+
+    pygame.draw.polygon(surf, (*top, alpha), [(0, 0), (CELL, 0), (CELL - 5, 5), (5, 5)])
+    pygame.draw.polygon(surf, (*bottom, alpha), [(0, CELL), (CELL, CELL), (CELL - 5, CELL - 5), (5, CELL - 5)])
+
+    pygame.draw.rect(surf, (255, 255, 255, 70), (3, 3, CELL - 6, CELL - 6), 2)
+    pygame.draw.rect(surf, (0, 0, 0, 140), (0, 0, CELL, CELL), 2)
+    screen.blit(surf, (px, py))
+
+def draw_board(board):
+    for y in range(ROWS):
+        for x in range(COLS):
+            kind = board[y][x]
+            if kind:
+                draw_block_neon(x * CELL, y * CELL, NEON[kind])
+
+def draw_piece(piece, color, alpha=255):
+    for x, y in piece.cells():
+        if y >= 0:
+            draw_block_neon(x * CELL, y * CELL, color, alpha)
+
+def draw_mini_piece(px, py, kind, scale=0.7):
+    mini_cell = int(CELL * scale)
+    coords = SHAPES[kind][0]
+    minx = min(c[0] for c in coords)
+    miny = min(c[1] for c in coords)
+    coords = [(c[0] - minx, c[1] - miny) for c in coords]
+
+    for cx, cy in coords:
+        x = px + cx * mini_cell
+        y = py + cy * mini_cell
+        surf = pygame.Surface((mini_cell, mini_cell), pygame.SRCALPHA)
+        col = NEON[kind]
+        surf.fill((*col, 255))
+        pygame.draw.rect(surf, (255, 255, 255, 110), (3, 3, mini_cell - 6, mini_cell - 6), 2)
+        pygame.draw.rect(surf, (0, 0, 0, 140), (0, 0, mini_cell, mini_cell), 2)
+        screen.blit(surf, (x, y))
+
+def draw_panel(score, level, lines, hold, next_queue, paused, combo, b2b):
+    px = COLS * CELL
+    pygame.draw.rect(screen, PANEL_BG, (px, 0, PANEL_W, HEIGHT))
+    pygame.draw.line(screen, (0, 255, 255), (px, 0), (px, HEIGHT), 2)
+
+    neon_text("TETRIS", BIG_FONT, px + 22, 14, (0, 255, 255))
+
+    screen.blit(FONT.render(f"Score: {score}", True, WHITE), (px + 16, 92))
+    screen.blit(FONT.render(f"Level: {level}", True, WHITE), (px + 16, 118))
+    screen.blit(FONT.render(f"Lines: {lines}", True, WHITE), (px + 16, 144))
+    screen.blit(FONT.render(f"Combo: {combo}", True, WHITE), (px + 16, 170))
+    screen.blit(FONT.render(f"B2B: {'ON' if b2b else 'OFF'}", True, WHITE), (px + 16, 196))
+
+    screen.blit(FONT.render("Hold:", True, WHITE), (px + 16, 235))
+    if hold:
+        draw_mini_piece(px + 26, 262, hold)
+
+    screen.blit(FONT.render("Next:", True, WHITE), (px + 16, 340))
+    if next_queue:
+        draw_mini_piece(px + 26, 370, next_queue[0], scale=0.78)
+
+    if paused:
+        overlay = pygame.Surface((COLS * CELL, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 170))
+        screen.blit(overlay, (0, 0))
+        neon_text("PAUSED", BIG_FONT, 55, HEIGHT // 2 - 55, (210, 0, 255))
+
+class Particle:
+    def __init__(self, x, y, color):
+        self.x = x
+        self.y = y
+        self.vx = random.uniform(-2.0, 2.0)
+        self.vy = random.uniform(-4.0, -1.0)
+        self.life = random.randint(22, 40)
+        self.color = color
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.vy += 0.20
+        self.life -= 1
+
+    def draw(self):
+        if self.life <= 0:
+            return
+        a = clamp(self.life * 6, 0, 170)
+        p = pygame.Surface((10, 10), pygame.SRCALPHA)
+        pygame.draw.circle(p, (*self.color, a), (5, 5), 4)
+        screen.blit(p, (self.x, self.y))
+
+JLSTZ_KICKS = {
+    (0, 1): [(0,0), (-1,0), (-1,1), (0,-2), (-1,-2)],
+    (1, 0): [(0,0), (1,0), (1,-1), (0,2), (1,2)],
+    (1, 2): [(0,0), (1,0), (1,-1), (0,2), (1,2)],
+    (2, 1): [(0,0), (-1,0), (-1,1), (0,-2), (-1,-2)],
+    (2, 3): [(0,0), (1,0), (1,1), (0,-2), (1,-2)],
+    (3, 2): [(0,0), (-1,0), (-1,-1), (0,2), (-1,2)],
+    (3, 0): [(0,0), (-1,0), (-1,-1), (0,2), (-1,2)],
+    (0, 3): [(0,0), (1,0), (1,1), (0,-2), (1,-2)],
+}
+I_KICKS = {
+    (0, 1): [(0,0), (-2,0), (1,0), (-2,-1), (1,2)],
+    (1, 0): [(0,0), (2,0), (-1,0), (2,1), (-1,-2)],
+    (1, 2): [(0,0), (-1,0), (2,0), (-1,2), (2,-1)],
+    (2, 1): [(0,0), (1,0), (-2,0), (1,-2), (-2,1)],
+    (2, 3): [(0,0), (2,0), (-1,0), (2,1), (-1,-2)],
+    (3, 2): [(0,0), (-2,0), (1,0), (-2,-1), (1,2)],
+    (3, 0): [(0,0), (1,0), (-2,0), (1,-2), (-2,1)],
+    (0, 3): [(0,0), (-1,0), (2,0), (-1,2), (2,-1)],
+}
+
+def srs_kicks(kind, old_rot, new_rot):
+    if kind == "O":
+        return [(0, 0)]
+    if kind == "I":
+        return I_KICKS.get((old_rot, new_rot), [(0, 0)])
+    return JLSTZ_KICKS.get((old_rot, new_rot), [(0, 0)])
 
 STATE_MENU = "menu"
-STATE_COUNTDOWN = "countdown"
+STATE_CONTROLS = "controls"
 STATE_PLAYING = "playing"
-STATE_PAUSED = "paused"
-STATE_GAME_OVER = "game_over"
 
-game_state = STATE_MENU
-winner_text = ""
+def draw_menu(selected, speed_name):
+    screen.fill(BLACK)
+    draw_background_glow()
+    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 170))
+    screen.blit(overlay, (0, 0))
 
-countdown_value = 3
-countdown_last_tick = 0
-serve_direction = 1
+    neon_text("TETRIS", BIG_FONT, 90, 70, (0, 255, 255))
+    neon_text("Modern Neon Deluxe", MID_FONT, 90, 125, (210, 0, 255))
 
-COURT_MARGIN = 18
-COURT_LINE_THICKNESS = 4
-CENTER_LINE_THICKNESS = 4
-CENTER_CIRCLE_RADIUS = 70
-HUD_PAD = 10
+    options = ["PLAY", "CONTROLS", "QUIT"]
+    y = 210
+    for i, opt in enumerate(options):
+        col = (0, 255, 255) if i == selected else (200, 200, 230)
+        neon_text(opt, MID_FONT, 120, y, col)
+        y += 52
 
+    neon_text(f"Speed: {speed_name}  (Press D to toggle)", FONT, 90, 420, (255, 255, 0))
+    neon_text("Use ↑/↓ then ENTER", FONT, 125, 460, (200, 200, 230))
+    pygame.display.flip()
 
-def make_beep(freq=440, duration=0.08, volume=0.35, sample_rate=44100):
-    n_samples = int(sample_rate * duration)
-    buf = array("h")
-    amplitude = int(32767 * volume)
-    for i in range(n_samples):
-        t = i / sample_rate
-        sample = int(amplitude * math.sin(2 * math.pi * freq * t))
-        buf.append(sample)
-    return pygame.mixer.Sound(buffer=buf.tobytes())
+def draw_controls():
+    screen.fill(BLACK)
+    draw_background_glow()
 
+    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 175))
+    screen.blit(overlay, (0, 0))
 
-sound_paddle = make_beep(880, 0.06, 0.35)
-sound_wall = make_beep(660, 0.05, 0.30)
-sound_score = make_beep(330, 0.10, 0.40)
-sound_win = make_beep(990, 0.20, 0.45)
-sound_lose = make_beep(220, 0.20, 0.45)
+    neon_text("CONTROLS", BIG_FONT, 90, 50, (0, 255, 255))
 
+    lines = [
+        "← / →     Move left / right",
+        "↓         Soft drop",
+        "SPACE     Hard drop",
+        "↑         Rotate clockwise",
+        "Z         Rotate counter-clockwise",
+        "C         Hold piece",
+        "P         Pause",
+        "H         Toggle controls overlay",
+        "ESC       Menu / Back",
+        "",
+        "Press BACKSPACE to return"
+    ]
 
-def draw_court():
-    pygame.draw.rect(
-        screen,
-        WHITE,
-        (COURT_MARGIN, COURT_MARGIN, WIDTH - 2 * COURT_MARGIN, HEIGHT - 2 * COURT_MARGIN),
-        COURT_LINE_THICKNESS
-    )
-
-    pygame.draw.line(
-        screen,
-        WHITE,
-        (WIDTH // 2, COURT_MARGIN),
-        (WIDTH // 2, HEIGHT - COURT_MARGIN),
-        CENTER_LINE_THICKNESS
-    )
-
-    pygame.draw.circle(
-        screen,
-        WHITE,
-        (WIDTH // 2, HEIGHT // 2),
-        CENTER_CIRCLE_RADIUS,
-        COURT_LINE_THICKNESS
-    )
-
-
-def clamp_paddle(paddle):
-    if paddle.top < COURT_MARGIN + COURT_LINE_THICKNESS:
-        paddle.top = COURT_MARGIN + COURT_LINE_THICKNESS
-    if paddle.bottom > HEIGHT - (COURT_MARGIN + COURT_LINE_THICKNESS):
-        paddle.bottom = HEIGHT - (COURT_MARGIN + COURT_LINE_THICKNESS)
-
-
-def reset_positions(direction=1):
-    global ball_speed_x, ball_speed_y, ai_frame_counter, serve_direction
-
-    left_paddle.y = HEIGHT // 2 - paddle_height // 2
-    right_paddle.y = HEIGHT // 2 - paddle_height // 2
-    ball.center = (WIDTH // 2, HEIGHT // 2)
-
-    serve_direction = direction
-    ball_speed_x = direction * BASE_BALL_SPEED_X
-    ball_speed_y = random.choice([-4, -3, 3, 4])
-
-    ai_frame_counter = 0
-
-
-def set_state(new_state):
-    global game_state
-    game_state = new_state
-
-
-def start_countdown(direction=1):
-    global countdown_value, countdown_last_tick
-    reset_positions(direction)
-    countdown_value = 3
-    countdown_last_tick = pygame.time.get_ticks()
-    set_state(STATE_COUNTDOWN)
-
-
-def reset_match():
-    global left_score, right_score, winner_text
-    left_score = 0
-    right_score = 0
-    winner_text = ""
-    start_countdown(direction=random.choice([-1, 1]))
-
-
-def apply_difficulty(level):
-    global ai_speed, ai_error, ai_delay_frames, difficulty_name
-
-    if level == 1:
-        difficulty_name = "Beginner"
-        ai_speed = 4
-        ai_error = 60
-        ai_delay_frames = 6
-
-    elif level == 2:
-        difficulty_name = "Intermediate"
-        ai_speed = 6
-        ai_error = 30
-        ai_delay_frames = 3
-
-    elif level == 3:
-        difficulty_name = "Expert"
-        ai_speed = 9
-        ai_error = 10
-        ai_delay_frames = 1
-
-
-def bounce_ball_off_paddle(paddle, direction):
-    global ball_speed_x, ball_speed_y
-
-    speed_x = min(abs(ball_speed_x) * BALL_SPEEDUP_FACTOR, MAX_BALL_SPEED_X)
-    ball_speed_x = direction * speed_x
-
-    hit_pos = (ball.centery - paddle.centery) / (paddle_height / 2)
-    hit_pos = max(-1, min(1, hit_pos))
-
-    ball_speed_y = hit_pos * MAX_BALL_SPEED_Y
-
-    if direction == 1:
-        ball.left = paddle.right
-    else:
-        ball.right = paddle.left
-
-    sound_paddle.play()
-
-
-def draw_hud():
-    score_text = score_font.render(f"{left_score}  :  {right_score}", True, WHITE)
-    diff_text = small_font.render(f"Difficulty: {difficulty_name}", True, WHITE)
-    controls_text = small_font.render("Controls: W/S or ↑/↓   |   P = Pause", True, WHITE)
-
-    hud_w = max(score_text.get_width(), diff_text.get_width()) + 2 * HUD_PAD
-    hud_h = score_text.get_height() + diff_text.get_height() + 3 * HUD_PAD
-
-    hud_x = WIDTH // 2 - hud_w // 2
-    hud_y = COURT_MARGIN + 10
-
-    pygame.draw.rect(screen, BLACK, (hud_x, hud_y, hud_w, hud_h))
-    pygame.draw.rect(screen, WHITE, (hud_x, hud_y, hud_w, hud_h), 2)
-
-    screen.blit(score_text, (hud_x + HUD_PAD, hud_y + HUD_PAD))
-    screen.blit(diff_text, (hud_x + HUD_PAD, hud_y + HUD_PAD + score_text.get_height() + 6))
-
-    screen.blit(controls_text, (COURT_MARGIN, HEIGHT - COURT_MARGIN - controls_text.get_height()))
-
-
-def draw_menu():
-    screen.fill(GREEN)
-    draw_court()
-
-    title = title_font.render("PONG", True, WHITE)
-    subtitle = small_font.render("Select Difficulty", True, WHITE)
-
-    option1 = menu_font.render("1 - Beginner", True, WHITE)
-    option2 = menu_font.render("2 - Intermediate", True, WHITE)
-    option3 = menu_font.render("3 - Expert", True, WHITE)
-
-    hint = small_font.render("Press 1, 2, or 3 to start", True, WHITE)
-
-    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 110))
-    screen.blit(subtitle, (WIDTH // 2 - subtitle.get_width() // 2, 200))
-
-    screen.blit(option1, (WIDTH // 2 - option1.get_width() // 2, 280))
-    screen.blit(option2, (WIDTH // 2 - option2.get_width() // 2, 340))
-    screen.blit(option3, (WIDTH // 2 - option3.get_width() // 2, 400))
-
-    screen.blit(hint, (WIDTH // 2 - hint.get_width() // 2, 490))
+    y = 150
+    for line in lines:
+        screen.blit(FONT.render(line, True, WHITE), (70, y))
+        y += 28
 
     pygame.display.flip()
 
+def run_game(speed_multiplier):
+    board = empty_board()
+    particles = []
 
-def draw_game(extra_line=""):
-    screen.fill(GREEN)
-    draw_court()
+    bag = new_bag()
+    next_queue = []
+    while len(next_queue) < 6:
+        if not bag:
+            bag = new_bag()
+        next_queue.append(bag.pop())
 
-    pygame.draw.rect(screen, RED, left_paddle)
-    pygame.draw.rect(screen, BLACK, right_paddle)
-    pygame.draw.ellipse(screen, WHITE, ball)
+    current = spawn_piece(next_queue.pop(0))
+    if not bag:
+        bag = new_bag()
+    next_queue.append(bag.pop())
 
-    draw_hud()
+    hold = None
+    can_hold = True
 
-    if extra_line:
-        extra_text = small_font.render(extra_line, True, WHITE)
-        screen.blit(extra_text, (WIDTH // 2 - extra_text.get_width() // 2, HEIGHT - COURT_MARGIN - 70))
+    score = 0
+    level = 1
+    total_lines = 0
+    combo = 0
+    b2b = False
 
-    pygame.display.flip()
+    fall_timer = 0
+    soft_drop = False
+    paused = False
 
+    flash_lines = []
+    flash_timer = 0
 
-def draw_countdown():
-    draw_game()
-    text = countdown_font.render(str(countdown_value), True, WHITE)
-    screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 - text.get_height() // 2))
-    pygame.display.flip()
+    show_controls_overlay = False
 
+    def try_rotate(dir_):
+        nonlocal current
+        old_rot = current.rot
+        new_rot = (current.rot + dir_) % 4
+        rotated = Piece(current.kind, current.x, current.y, new_rot)
+        if valid(rotated, board):
+            current = rotated
+            return True
+        for dx, dy in srs_kicks(current.kind, old_rot, new_rot):
+            kicked = Piece(current.kind, current.x + dx, current.y + dy, new_rot)
+            if valid(kicked, board):
+                current = kicked
+                return True
+        return False
 
-def draw_paused():
-    draw_game("PAUSED")
-    overlay = small_font.render("Press P to Resume", True, WHITE)
-    screen.blit(overlay, (WIDTH // 2 - overlay.get_width() // 2, HEIGHT // 2 + 80))
-    pygame.display.flip()
+    def try_move(dx, dy):
+        nonlocal current
+        moved = Piece(current.kind, current.x + dx, current.y + dy, current.rot)
+        if valid(moved, board):
+            current = moved
+            return True
+        return False
 
+    def spawn_next():
+        nonlocal current, next_queue, bag
+        current = spawn_piece(next_queue.pop(0))
+        if not bag:
+            bag = new_bag()
+        next_queue.append(bag.pop())
+        return valid(current, board)
 
-def draw_game_over():
-    screen.fill(GREEN)
-    draw_court()
+    def apply_clear_effect(lines_):
+        for _ in range(55):
+            px = random.randint(10, COLS * CELL - 10)
+            py = random.choice(lines_) * CELL + random.randint(0, CELL)
+            particles.append(Particle(px, py, (0, 255, 255)))
 
-    game_over_title = game_over_font.render("GAME OVER", True, WHITE)
-    winner_line = menu_font.render(winner_text, True, WHITE)
+    def handle_line_clear(cleared, lines_cleared):
+        nonlocal score, combo, b2b, total_lines, level, flash_lines, flash_timer
+        if cleared > 0:
+            combo += 1
+            total_lines += cleared
+            level = 1 + total_lines // 10
 
-    option_restart = small_font.render("Press R to Restart", True, WHITE)
-    option_menu = small_font.render("Press M for Main Menu", True, WHITE)
-    option_quit = small_font.render("Press ESC to Quit", True, WHITE)
+            base_points = scoring_for_lines(cleared, level)
+            combo_bonus = 50 * (combo - 1) * level if combo > 1 else 0
 
-    screen.blit(game_over_title, (WIDTH // 2 - game_over_title.get_width() // 2, 140))
-    screen.blit(winner_line, (WIDTH // 2 - winner_line.get_width() // 2, 240))
+            if is_tetris(cleared):
+                if b2b:
+                    base_points = int(base_points * 1.5)
+                b2b = True
+            else:
+                b2b = False
 
-    screen.blit(option_restart, (WIDTH // 2 - option_restart.get_width() // 2, 360))
-    screen.blit(option_menu, (WIDTH // 2 - option_menu.get_width() // 2, 410))
-    screen.blit(option_quit, (WIDTH // 2 - option_quit.get_width() // 2, 460))
+            score += base_points + combo_bonus
 
-    pygame.display.flip()
-
-
-def update_ai():
-    global ai_frame_counter
-    ai_frame_counter += 1
-
-    if ball_speed_x > 0:
-        if ai_frame_counter % ai_delay_frames == 0:
-            target_y = ball.centery + random.randint(-ai_error, ai_error)
-
-            if target_y > right_paddle.centery:
-                right_paddle.y += ai_speed
-            elif target_y < right_paddle.centery:
-                right_paddle.y -= ai_speed
-
-    clamp_paddle(right_paddle)
-
-
-def update_ball_and_collisions():
-    global ball_speed_y, winner_text, left_score, right_score
-
-    ball.x += ball_speed_x
-    ball.y += ball_speed_y
-
-    top_limit = COURT_MARGIN + COURT_LINE_THICKNESS
-    bottom_limit = HEIGHT - (COURT_MARGIN + COURT_LINE_THICKNESS)
-
-    if ball.top <= top_limit:
-        ball.top = top_limit
-        ball_speed_y *= -1
-        sound_wall.play()
-
-    if ball.bottom >= bottom_limit:
-        ball.bottom = bottom_limit
-        ball_speed_y *= -1
-        sound_wall.play()
-
-    if ball.colliderect(left_paddle):
-        bounce_ball_off_paddle(left_paddle, direction=1)
-
-    if ball.colliderect(right_paddle):
-        bounce_ball_off_paddle(right_paddle, direction=-1)
-
-    if ball.left <= 0:
-        right_score += 1
-        sound_score.play()
-
-        if right_score >= WIN_SCORE:
-            winner_text = "AI Wins!"
-            sound_lose.play()
-            set_state(STATE_GAME_OVER)
+            flash_lines = lines_cleared[:]
+            flash_timer = 130
+            apply_clear_effect(lines_cleared)
         else:
-            start_countdown(direction=1)
+            combo = 0
 
-    if ball.right >= WIDTH:
-        left_score += 1
-        sound_score.play()
+    def hard_drop():
+        nonlocal current, score, can_hold
+        drop_y = get_drop_y(current, board)
+        distance = drop_y - current.y
+        current.y = drop_y
+        score += distance * 2
 
-        if left_score >= WIN_SCORE:
-            winner_text = "You Win!"
-            sound_win.play()
-            set_state(STATE_GAME_OVER)
-        else:
-            start_countdown(direction=-1)
+        if any(y < 0 for _, y in current.cells()):
+            return False
 
+        lock_piece(current, board)
+        board2, cleared, lines_cleared = clear_lines(board)
+        board[:] = board2
+        handle_line_clear(cleared, lines_cleared)
 
-def handle_player_input():
-    keys = pygame.key.get_pressed()
+        can_hold = True
+        ok = spawn_next()
+        return ok
 
-    if keys[pygame.K_w] or keys[pygame.K_UP]:
-        left_paddle.y -= player_speed
-    if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-        left_paddle.y += player_speed
+    game_over = False
+    running = True
 
-    clamp_paddle(left_paddle)
+    while running:
+        dt = clock.tick(60)
+        fall_timer += dt
 
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return "quit"
 
-def update_countdown():
-    global countdown_value, countdown_last_tick
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return "menu"
 
-    now = pygame.time.get_ticks()
-    if now - countdown_last_tick >= 700:
-        countdown_value -= 1
-        countdown_last_tick = now
+                if event.key == pygame.K_h:
+                    show_controls_overlay = not show_controls_overlay
 
-    if countdown_value <= 0:
-        set_state(STATE_PLAYING)
+                if event.key == pygame.K_p:
+                    paused = not paused
 
+                if game_over:
+                    if event.key == pygame.K_r:
+                        return "restart"
+                    continue
 
-running = True
-while running:
-    clock.tick(60)
+                if paused or show_controls_overlay:
+                    continue
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+                if event.key == pygame.K_LEFT:
+                    try_move(-1, 0)
+                elif event.key == pygame.K_RIGHT:
+                    try_move(1, 0)
+                elif event.key == pygame.K_DOWN:
+                    soft_drop = True
+                elif event.key == pygame.K_UP:
+                    try_rotate(1)
+                elif event.key == pygame.K_z:
+                    try_rotate(-1)
+                elif event.key == pygame.K_SPACE:
+                    ok = hard_drop()
+                    if not ok:
+                        game_over = True
+                elif event.key == pygame.K_c:
+                    if can_hold:
+                        can_hold = False
+                        if hold is None:
+                            hold = current.kind
+                            ok = spawn_next()
+                            if not ok:
+                                game_over = True
+                        else:
+                            hold, current.kind = current.kind, hold
+                            current.x, current.y, current.rot = 3, -2, 0
+                            if not valid(current, board):
+                                game_over = True
 
-        if game_state == STATE_MENU and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_1:
-                apply_difficulty(1)
-                reset_match()
-            elif event.key == pygame.K_2:
-                apply_difficulty(2)
-                reset_match()
-            elif event.key == pygame.K_3:
-                apply_difficulty(3)
-                reset_match()
+            if event.type == pygame.KEYUP:
+                if event.key == pygame.K_DOWN:
+                    soft_drop = False
 
-        if game_state in (STATE_PLAYING, STATE_PAUSED, STATE_COUNTDOWN) and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_p:
-                if game_state == STATE_PLAYING:
-                    set_state(STATE_PAUSED)
-                elif game_state == STATE_PAUSED:
-                    set_state(STATE_PLAYING)
+        if not paused and not game_over and not show_controls_overlay:
+            speed = fall_speed_ms(level, speed_multiplier=speed_multiplier)
+            if soft_drop:
+                speed = max(30, speed // 10)
 
-        if game_state == STATE_GAME_OVER and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_r:
-                reset_match()
-            elif event.key == pygame.K_m:
-                set_state(STATE_MENU)
-            elif event.key == pygame.K_ESCAPE:
-                running = False
+            if fall_timer >= speed:
+                fall_timer = 0
+                if not try_move(0, 1):
+                    if any(y < 0 for _, y in current.cells()):
+                        game_over = True
+                    else:
+                        lock_piece(current, board)
+                        board2, cleared, lines_cleared = clear_lines(board)
+                        board[:] = board2
+                        handle_line_clear(cleared, lines_cleared)
+                        can_hold = True
+                        ok = spawn_next()
+                        if not ok:
+                            game_over = True
 
-    if game_state == STATE_MENU:
-        draw_menu()
+        screen.fill(BLACK)
+        draw_background_glow()
+        draw_glass_playfield()
+        draw_grid()
+        draw_board(board)
 
-    elif game_state == STATE_COUNTDOWN:
-        update_countdown()
-        draw_countdown()
+        if flash_timer > 0 and flash_lines:
+            flash_timer -= dt
+            flash = pygame.Surface((COLS * CELL, CELL), pygame.SRCALPHA)
+            flash.fill((255, 255, 255, 110))
+            for ly in flash_lines:
+                screen.blit(flash, (0, ly * CELL))
 
-    elif game_state == STATE_PLAYING:
-        handle_player_input()
-        update_ai()
-        update_ball_and_collisions()
-        draw_game()
+        for p in particles[:]:
+            p.update()
+            p.draw()
+            if p.life <= 0:
+                particles.remove(p)
 
-    elif game_state == STATE_PAUSED:
-        draw_paused()
+        if not game_over:
+            ghost_y = get_drop_y(current, board)
+            ghost = Piece(current.kind, current.x, ghost_y, current.rot)
+            draw_piece(ghost, NEON["GHOST"], alpha=55)
+            draw_piece(current, NEON[current.kind])
 
-    elif game_state == STATE_GAME_OVER:
-        draw_game_over()
+        draw_panel(score, level, total_lines, hold, next_queue, paused, combo, b2b)
 
-pygame.quit()
-sys.exit()
+        if show_controls_overlay:
+            overlay = pygame.Surface((COLS * CELL, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 185))
+            screen.blit(overlay, (0, 0))
+            neon_text("CONTROLS", BIG_FONT, 35, 50, (0, 255, 255))
+            lines = [
+                "←/→ Move",
+                "↓ Soft Drop",
+                "SPACE Hard Drop",
+                "↑ Rotate",
+                "Z Rotate Back",
+                "C Hold",
+                "P Pause",
+                "H Close",
+                "ESC Menu",
+            ]
+            y = 135
+            for line in lines:
+                screen.blit(MID_FONT.render(line, True, WHITE), (50, y))
+                y += 34
+
+        if game_over:
+            overlay = pygame.Surface((COLS * CELL, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 190))
+            screen.blit(overlay, (0, 0))
+            neon_text("GAME OVER", BIG_FONT, 35, HEIGHT // 2 - 80, (255, 60, 120))
+            screen.blit(FONT.render("Press R to Restart", True, WHITE), (52, HEIGHT // 2 - 10))
+            screen.blit(FONT.render("ESC to Menu", True, WHITE), (78, HEIGHT // 2 + 18))
+
+        pygame.display.flip()
+
+def main():
+    state = STATE_MENU
+    menu_selected = 0
+
+    speed_modes = [
+        ("Normal", 1.0),
+        ("Fast", 1.25),
+        ("Insane", 1.5),
+    ]
+    speed_idx = 0
+
+    while True:
+        if state == STATE_MENU:
+            draw_menu(menu_selected, speed_modes[speed_idx][0])
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        pygame.quit()
+                        sys.exit()
+
+                    if event.key == pygame.K_UP:
+                        menu_selected = (menu_selected - 1) % 3
+                    elif event.key == pygame.K_DOWN:
+                        menu_selected = (menu_selected + 1) % 3
+                    elif event.key == pygame.K_d:
+                        speed_idx = (speed_idx + 1) % len(speed_modes)
+
+                    elif event.key == pygame.K_RETURN:
+                        if menu_selected == 0:
+                            state = STATE_PLAYING
+                        elif menu_selected == 1:
+                            state = STATE_CONTROLS
+                        elif menu_selected == 2:
+                            pygame.quit()
+                            sys.exit()
+
+        elif state == STATE_CONTROLS:
+            draw_controls()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_BACKSPACE, pygame.K_ESCAPE):
+                        state = STATE_MENU
+
+        elif state == STATE_PLAYING:
+            speed_multiplier = speed_modes[speed_idx][1]
+            result = run_game(speed_multiplier)
+            if result == "quit":
+                pygame.quit()
+                sys.exit()
+            if result == "restart":
+                state = STATE_PLAYING
+            else:
+                state = STATE_MENU
+
+if __name__ == "__main__":
+    main()
